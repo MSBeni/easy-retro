@@ -6,9 +6,10 @@ It is a static site (plain HTML, CSS and JavaScript, no build step) that runs on
 
 ## How a retro runs
 
+0. **Join.** People open the invite link and type a name. Names show in the "who's here" list only.
 1. **Write.** Everyone adds cards to the columns. Until the reveal, each person sees only their own cards. This is enforced by the database rules, not just hidden on screen.
 2. **Reveal.** The facilitator opens the board. Cards carry no names, so people can volunteer to talk about their own.
-3. **Vote.** Each person spends a fixed number of votes. Totals stay hidden until discussion so nobody piles on.
+3. **Vote.** Each person spends a fixed number of votes (1 to 10, chosen by the facilitator). Totals stay hidden until discussion so nobody piles on.
 4. **Discuss.** Cards are sorted by votes. The facilitator highlights the card being discussed for everyone, and anyone can add action items with an owner and due date.
 5. **Wrap up.** Copy the summary as Markdown or download it, then delete the retro if you don't want to keep the data.
 
@@ -18,7 +19,8 @@ Formats: Went well / Didn't go well / Try next, Start / Stop / Continue, the 4 L
 
 ## Privacy model
 
-- Everyone signs in with Firebase **anonymous** sign-in. No names, emails or accounts are collected.
+- Everyone signs in with Firebase **anonymous** sign-in. No emails or accounts are collected. People type a display name when they join a retro, and it is shown only in the participant list.
+- Nothing links a name to a card or a vote. Presence and votes are keyed by separate random per-retro ids. The mapping from a sign-in id to those ids (`seats` and `ballots`) can be read only by its owner, and each person gets exactly one ballot, so votes can't be stuffed.
 - A card is stored with its column, text and timestamp only. A separate `owners` entry links each card to the writer's anonymous id so the writer can edit or delete it during the write phase. No client can read `owners`; only someone with admin access to the Firebase project can, and an anonymous id isn't tied to a person.
 - Card order on the board comes from a hash of the card id, so the order doesn't show who wrote what or when.
 - Anyone with a retro link can join that retro. Retro ids are random, and the database doesn't let clients list retros.
@@ -71,7 +73,7 @@ Open http://localhost:8080. Add `localhost` to the authorized domains if Firebas
 
 - Facilitator controls belong to the browser that created the retro.
 - No card grouping or merging yet. Duplicate cards can be removed by the facilitator after the reveal.
-- The Firebase free plan (Spark) allows 100 simultaneous connections to the Realtime Database, which is plenty for a team retro.
+- There is no participant cap in the app. The Firebase free plan (Spark) allows 100 simultaneous connections to the Realtime Database, which is plenty for a team retro.
 
 ## License
 

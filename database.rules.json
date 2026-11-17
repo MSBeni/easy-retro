@@ -2,95 +2,146 @@
   "rules": {
     ".read": false,
     ".write": false,
-
     "admins": {
       "$uid": {
         ".read": "auth != null && auth.uid === $uid"
       }
     },
-
     "rooms": {
       "$room": {
         ".write": "auth != null && data.exists() && !newData.exists() && data.child('meta/facilitator').val() === auth.uid",
-
         "meta": {
           ".read": "auth != null",
           ".write": "auth != null && !data.exists() && newData.child('facilitator').val() === auth.uid && root.child('admins/' + auth.uid).val() === true",
           ".validate": "newData.hasChildren(['title', 'facilitator', 'createdAt', 'columns', 'votesPerPerson'])",
-          "title": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 120" },
-          "facilitator": { ".validate": "newData.isString()" },
-          "createdAt": { ".validate": "newData.val() === now" },
-          "votesPerPerson": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 5" },
-          "columns": {
-            "$i": { ".validate": "$i.matches(/^[0-5]$/) && newData.isString() && newData.val().length > 0 && newData.val().length <= 60" }
+          "title": {
+            ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 120"
           },
-          "$other": { ".validate": false }
+          "facilitator": {
+            ".validate": "newData.isString()"
+          },
+          "createdAt": {
+            ".validate": "newData.val() === now"
+          },
+          "votesPerPerson": {
+            ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 10"
+          },
+          "columns": {
+            "$i": {
+              ".validate": "$i.matches(/^[0-5]$/) && newData.isString() && newData.val().length > 0 && newData.val().length <= 60"
+            }
+          },
+          "$other": {
+            ".validate": false
+          }
         },
-
         "state": {
           ".read": "auth != null",
           ".write": "auth != null && newData.parent().child('meta/facilitator').val() === auth.uid",
           ".validate": "newData.hasChild('phase')",
-          "phase": { ".validate": "newData.isString() && newData.val().matches(/^(write|reveal|vote|discuss|done)$/)" },
-          "timerEnd": { ".validate": "newData.isNumber()" },
-          "focus": { ".validate": "newData.isString() && newData.val().length <= 40" },
-          "$other": { ".validate": false }
-        },
-
-        "presence": {
-          ".read": "auth != null",
-          "$uid": {
-            ".write": "auth != null && auth.uid === $uid && root.child('rooms/' + $room + '/meta').exists()",
-            ".validate": "newData.hasChildren(['ready'])",
-            "ready": { ".validate": "newData.isBoolean()" },
-            "$other": { ".validate": false }
+          "phase": {
+            ".validate": "newData.isString() && newData.val().matches(/^(write|reveal|vote|discuss|done)$/)"
+          },
+          "timerEnd": {
+            ".validate": "newData.isNumber()"
+          },
+          "focus": {
+            ".validate": "newData.isString() && newData.val().length <= 40"
+          },
+          "$other": {
+            ".validate": false
           }
         },
-
+        "presence": {
+          ".read": "auth != null",
+          "$pid": {
+            ".write": "auth != null && (root.child('rooms/' + $room + '/seats/' + auth.uid).val() === $pid || newData.parent().parent().child('seats/' + auth.uid).val() === $pid)",
+            ".validate": "newData.hasChildren(['name', 'ready'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 40"
+            },
+            "ready": {
+              ".validate": "newData.isBoolean()"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        },
         "cards": {
           ".read": "auth != null && root.child('rooms/' + $room + '/state/phase').exists() && root.child('rooms/' + $room + '/state/phase').val() !== 'write'",
           "$card": {
             ".write": "auth != null && ((root.child('rooms/' + $room + '/state/phase').val() === 'write' && (data.exists() ? root.child('rooms/' + $room + '/owners/' + $card).val() === auth.uid : newData.parent().parent().child('owners/' + $card).val() === auth.uid)) || (!newData.exists() && root.child('rooms/' + $room + '/meta/facilitator').val() === auth.uid))",
             ".validate": "newData.hasChildren(['col', 'text', 'createdAt'])",
-            "col": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 5" },
-            "text": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 500" },
-            "createdAt": { ".validate": "newData.isNumber()" },
-            "$other": { ".validate": false }
+            "col": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 5"
+            },
+            "text": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 500"
+            },
+            "createdAt": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": false
+            }
           }
         },
-
         "owners": {
           "$card": {
             ".write": "auth != null && ((!data.exists() && newData.val() === auth.uid) || (data.val() === auth.uid && !newData.exists()))",
             ".validate": "newData.isString()"
           }
         },
-
         "votes": {
           ".read": "auth != null && root.child('rooms/' + $room + '/state/phase').exists() && root.child('rooms/' + $room + '/state/phase').val().matches(/^(discuss|done)$/)",
-          "$uid": {
-            ".read": "auth != null && auth.uid === $uid",
-            ".write": "auth != null && auth.uid === $uid && root.child('rooms/' + $room + '/state/phase').val() === 'vote'",
+          "$vid": {
+            ".read": "auth != null && root.child('rooms/' + $room + '/ballots/' + auth.uid).val() === $vid",
+            ".write": "auth != null && root.child('rooms/' + $room + '/state/phase').val() === 'vote' && (root.child('rooms/' + $room + '/ballots/' + auth.uid).val() === $vid || newData.parent().parent().child('ballots/' + auth.uid).val() === $vid)",
             "$slot": {
-              ".validate": "newData.isString() && root.child('rooms/' + $room + '/cards/' + newData.val()).exists() && (($slot === 'v0' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 1) || ($slot === 'v1' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 2) || ($slot === 'v2' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 3) || ($slot === 'v3' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 4) || ($slot === 'v4' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 5))"
+              ".validate": "newData.isString() && root.child('rooms/' + $room + '/cards/' + newData.val()).exists() && (($slot === 'v0' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 1) || ($slot === 'v1' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 2) || ($slot === 'v2' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 3) || ($slot === 'v3' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 4) || ($slot === 'v4' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 5) || ($slot === 'v5' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 6) || ($slot === 'v6' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 7) || ($slot === 'v7' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 8) || ($slot === 'v8' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 9) || ($slot === 'v9' && root.child('rooms/' + $room + '/meta/votesPerPerson').val() >= 10))"
             }
           }
         },
-
         "actions": {
           ".read": "auth != null && root.child('rooms/' + $room + '/meta').exists()",
           "$id": {
             ".write": "auth != null && root.child('rooms/' + $room + '/state/phase').exists() && root.child('rooms/' + $room + '/state/phase').val() !== 'write'",
             ".validate": "newData.hasChildren(['text', 'createdAt'])",
-            "text": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 300" },
-            "owner": { ".validate": "newData.isString() && newData.val().length <= 80" },
-            "due": { ".validate": "newData.isString() && newData.val().length <= 40" },
-            "createdAt": { ".validate": "newData.isNumber()" },
-            "$other": { ".validate": false }
+            "text": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 300"
+            },
+            "owner": {
+              ".validate": "newData.isString() && newData.val().length <= 80"
+            },
+            "due": {
+              ".validate": "newData.isString() && newData.val().length <= 40"
+            },
+            "createdAt": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": false
+            }
           }
         },
-
-        "$other": { ".validate": false }
+        "seats": {
+          "$uid": {
+            ".read": "auth != null && auth.uid === $uid",
+            ".write": "auth != null && auth.uid === $uid && !data.exists() && root.child('rooms/' + $room + '/meta').exists()",
+            ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 40"
+          }
+        },
+        "ballots": {
+          "$uid": {
+            ".read": "auth != null && auth.uid === $uid",
+            ".write": "auth != null && auth.uid === $uid && !data.exists()",
+            ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 40"
+          }
+        },
+        "$other": {
+          ".validate": false
+        }
       }
     }
   }

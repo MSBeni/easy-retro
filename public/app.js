@@ -56,6 +56,16 @@ function fatal(title, detail) {
   appEl.replaceChildren(el('div', { class: 'panel home' }, el('h1', { text: title }), el('p', { class: 'muted', text: detail })));
 }
 
+const NAME_KEY = 'easy-retro:name';
+function savedName() { try { return localStorage.getItem(NAME_KEY) || ''; } catch { return ''; } }
+function saveName(n) { try { localStorage.setItem(NAME_KEY, n); } catch { /* private mode */ } }
+
+const AVATAR_COLORS = ['#2f9e66', '#d1495b', '#4f6bed', '#d08c1d', '#8b5cf6', '#1f9aa1', '#e0663a', '#c2418a'];
+function initials(name) {
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  return ((parts[0] || '?')[0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
+
 // Stable pseudo-random order so card order does not reveal who wrote what or when.
 function hash(s) {
   let h = 2166136261;
@@ -113,7 +123,7 @@ async function Home() {
   if (isAdmin) {
     const title = el('input', { type: 'text', maxlength: '120', placeholder: 'e.g. Project X retro' });
     const tmpl = el('select', {}, Object.entries(TEMPLATES).map(([k, t]) => el('option', { value: k, text: t.label })));
-    const votes = el('select', {}, [1, 2, 3, 4, 5].map((n) => el('option', { value: String(n), text: `${n} vote${n > 1 ? 's' : ''} per person`, selected: n === 3 })));
+    const votes = el('select', {}, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => el('option', { value: String(n), text: `${n} vote${n > 1 ? 's' : ''} per person`, selected: n === 3 })));
     const create = el('button', { class: 'btn primary', text: 'Create retro' });
     create.addEventListener('click', async () => {
       const t = title.value.trim();
@@ -160,9 +170,8 @@ function Room(id) {
   const S = {
     meta: null, state: null, cards: {}, votes: {}, myVotes: {}, actions: {}, presence: {},
     ready: false, editing: null, built: false, lastFocus: null, deleteArmed: false,
+    name: savedName(), pid: null, vid: null, started: false,
   };
-  let cardsUnsub = null;
-  let votesUnsub = null;
   const subs = {};
 
   const mineKey = `easy-retro:${id}:mine`;
@@ -170,29 +179,72 @@ function Room(id) {
   try { mine = JSON.parse(localStorage.getItem(mineKey)) || {}; } catch { mine = {}; }
   const saveMine = () => { try { localStorage.setItem(mineKey, JSON.stringify(mine)); } catch { /* private mode */ } };
 
-  const meRef = ref(db, `${base}/presence/${uid}`);
   const isF = () => S.meta && S.meta.facilitator === uid;
 
   appEl.replaceChildren(el('p', { class: 'muted', text: 'Joining…' }));
 
   onValue(ref(db, `${base}/meta`), (s) => {
     if (!s.exists()) { notFound(); return; }
-    const first = !S.meta;
     S.meta = s.val();
-    if (first) {
-      build();
-      onValue(ref(db, '.info/connected'), (c) => {
-        if (c.val() !== true) return;
-        onDisconnect(meRef).remove();
-        set(meRef, { ready: S.ready }).catch(() => {});
-      });
-      onValue(ref(db, `${base}/state`), (st) => { S.state = st.val() || { phase: 'write' }; syncSubscriptions(); render(); });
-      onValue(ref(db, `${base}/presence`), (p) => { S.presence = p.val() || {}; render(); });
-      onValue(ref(db, `${base}/votes/${uid}`), (v) => { S.myVotes = v.val() || {}; render(); });
-      onValue(ref(db, `${base}/actions`), (a) => { S.actions = a.val() || {}; render(); }, () => {});
-    }
-    render();
+    if (S.started) { render(); return; }
+    if (S.name) start();
+    else nameGate();
   }, () => notFound());
+
+  // Names are shown in the participant list only. Presence and votes are keyed by
+  // random per-room ids, so nothing on the page can link a name to a card or a vote.
+  function nameGate() {
+    const input = el('input', { type: 'text', maxlength: '40', placeholder: 'Your name', value: S.name, 'aria-label': 'Your name' });
+    const go = () => {
+      const n = input.value.trim();
+      if (!n) { input.focus(); return; }
+      S.name = n;
+      saveName(n);
+      if (S.started) { updatePresence(); render(); } else start();
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    appEl.replaceChildren(el('div', { class: 'panel namegate' },
+      el('h1', { text: S.meta.title }),
+      el('p', { class: 'muted', text: 'Add your name so the group can see who has joined. Your cards and votes stay anonymous: nothing links them to your name.' }),
+      el('div', { class: 'field' }, input),
+      el('button', { class: 'btn primary', text: 'Join the retro', onclick: go })));
+    input.focus();
+  }
+
+  async function start() {
+    if (S.started) return;
+    S.started = true;
+    build();
+    try {
+      S.pid = (await get(ref(db, `${base}/seats/${uid}`))).val();
+      if (!S.pid) {
+        S.pid = push(ref(db, `${base}/presence`)).key;
+        await update(ref(db, base), { [`seats/${uid}`]: S.pid, [`presence/${S.pid}`]: { name: S.name, ready: false } });
+      }
+      S.vid = (await get(ref(db, `${base}/ballots/${uid}`))).val();
+    } catch (e) {
+      toast(`Could not join: ${e.message}`);
+    }
+    if (S.vid) watchMyVotes();
+    onValue(ref(db, '.info/connected'), (c) => {
+      if (c.val() !== true || !S.pid) return;
+      onDisconnect(ref(db, `${base}/presence/${S.pid}`)).remove();
+      updatePresence();
+    });
+    onValue(ref(db, `${base}/state`), (st) => { S.state = st.val() || { phase: 'write' }; syncSubscriptions(); render(); });
+    onValue(ref(db, `${base}/presence`), (p) => { S.presence = p.val() || {}; render(); });
+    onValue(ref(db, `${base}/actions`), (a) => { S.actions = a.val() || {}; render(); }, () => {});
+  }
+
+  function updatePresence() {
+    if (!S.pid) return Promise.resolve();
+    return set(ref(db, `${base}/presence/${S.pid}`), { name: S.name, ready: S.ready }).catch(() => {});
+  }
+
+  function watchMyVotes() {
+    if (subs.myVotes || !S.vid) return;
+    subs.myVotes = onValue(ref(db, `${base}/votes/${S.vid}`), (v) => { S.myVotes = v.val() || {}; render(); }, () => { subs.myVotes = null; });
+  }
 
   function notFound() {
     appEl.replaceChildren(el('div', { class: 'panel home' },
@@ -232,7 +284,7 @@ function Room(id) {
     document.title = `${S.meta.title} · Easy Retro`;
     dom.title = el('h1');
     dom.steps = el('ol', { class: 'steps', 'aria-label': 'Retro phases' });
-    dom.sub = el('div', { class: 'muted small', style: 'margin-top:8px' });
+    dom.sub = el('div', { class: 'people', id: 'participants' });
     dom.timer = el('div', { class: 'timer', 'aria-label': 'Timer' });
     dom.facil = el('div', { class: 'facil', id: 'facilitator-controls' });
     dom.hint = el('div', { class: 'hint', id: 'phase-hint' });
@@ -247,8 +299,9 @@ function Room(id) {
       cancel.addEventListener('click', clearEditing);
       const composer = el('div', { class: 'composer' }, ta,
         el('div', { class: 'row' }, save, cancel, el('span', { class: 'muted small', text: 'Ctrl or ⌘ + Enter adds it' })));
-      dom.board.append(el('section', { class: 'col', style: `background: var(--col-${i % 6})` }, el('h2', { text: name }), list, composer));
-      return { list, ta, save, cancel, composer };
+      const count = el('span', { class: 'col-count' });
+      dom.board.append(el('section', { class: 'col', style: colVars(i) }, el('div', { class: 'col-head' }, el('h2', { text: name }), count), list, composer));
+      return { list, ta, save, cancel, composer, count };
     });
 
     dom.ranked = el('div', { class: 'cards ranked', id: 'ranked-cards' });
@@ -267,7 +320,7 @@ function Room(id) {
     dom.done = el('section', { class: 'panel', id: 'summary', style: 'margin-bottom:16px' });
 
     appEl.replaceChildren(
-      el('div', { class: 'roomhead' }, el('div', {}, dom.title, dom.steps, dom.sub), dom.timer),
+      el('section', { class: 'panel hero' }, el('div', {}, dom.title, dom.steps, dom.sub), dom.timer),
       dom.facil, dom.hint, dom.done, dom.board, dom.discuss);
     setInterval(tick, 500);
   }
@@ -279,12 +332,11 @@ function Room(id) {
     const pi = Math.max(0, PHASES.findIndex((p) => p.id === phase));
     dom.title.textContent = S.meta.title;
     dom.steps.replaceChildren(...PHASES.map((p, i) => el('li', { class: i === pi ? 'on' : i < pi ? 'past' : '', text: p.label })));
-    const people = Object.values(S.presence);
-    const ready = people.filter((p) => p && p.ready).length;
-    dom.sub.textContent = `${people.length} here${phase === 'write' ? ` · ${ready} done writing` : ''}`;
+    renderPeople(phase);
 
     topRight.replaceChildren(
       isF() ? el('span', { class: 'muted', text: 'You are facilitating' }) : null,
+      el('button', { class: 'btn small', text: `${S.name} · change name`, onclick: () => { const n = (prompt('Your name', S.name) || '').trim().slice(0, 40); if (n) { S.name = n; saveName(n); updatePresence(); render(); } } }),
       el('button', { class: 'btn small', text: 'Copy invite link', onclick: () => copyText(`${location.origin}${location.pathname}?room=${id}`, 'Invite link copied') }));
 
     renderFacil(phase, pi);
@@ -320,11 +372,27 @@ function Room(id) {
     if (phase === 'write') {
       parts.push(' ', el('button', {
         class: 'btn small', text: S.ready ? 'I am still writing' : 'I am done',
-        onclick: () => { S.ready = !S.ready; set(meRef, { ready: S.ready }).catch(() => {}); render(); },
+        onclick: () => { S.ready = !S.ready; updatePresence(); render(); },
       }));
     }
     if (phase === 'vote') parts.push(el('strong', { text: ` Votes left: ${votesLeft()} of ${S.meta.votesPerPerson}.` }));
     dom.hint.replaceChildren(...parts);
+  }
+
+  function renderPeople(phase) {
+    const people = Object.entries(S.presence || {}).filter(([, p]) => p && p.name)
+      .sort((a, b) => a[1].name.localeCompare(b[1].name));
+    const ready = people.filter(([, p]) => p.ready).length;
+    dom.sub.replaceChildren(
+      el('span', { class: 'count', text: `${people.length} ${people.length === 1 ? 'person' : 'people'} here${phase === 'write' ? ` · ${ready} done writing` : ''}` }),
+      el('div', { class: 'avatars' }, people.map(([pid, p]) => el('span', { class: `person${pid === S.pid ? ' me' : ''}`, title: p.name },
+        el('span', { class: 'avatar', style: `background:${AVATAR_COLORS[hash(p.name) % AVATAR_COLORS.length]}`, text: initials(p.name) }),
+        p.name + (pid === S.pid ? ' (you)' : '')))));
+  }
+
+  function colVars(i) {
+    const k = Number(i) % 6;
+    return `--accent-col: var(--c${k}); --tint: var(--t${k})`;
   }
 
   function renderBoard(phase) {
@@ -333,6 +401,7 @@ function Room(id) {
     dom.cols.forEach((c, i) => {
       c.composer.hidden = phase !== 'write';
       const items = entries.filter(([, v]) => v && v.col === i).map(([cid, v]) => cardEl(cid, v, phase));
+      c.count.textContent = String(items.length);
       c.list.replaceChildren(...(items.length ? items : [el('div', {
         class: 'empty',
         text: phase === 'write' ? 'Your cards show here. Everyone else\'s stay hidden until the reveal.' : 'No cards',
@@ -356,7 +425,7 @@ function Room(id) {
     } else if (isF()) {
       meta.append(el('span'), removeCardButton(cid));
     }
-    return el('div', { class: `card${phase === 'write' ? ' mine' : ''}`, 'data-id': cid }, v.text, meta.childNodes.length ? meta : null);
+    return el('div', { class: `card${phase === 'write' ? ' mine' : ''}`, 'data-id': cid, style: colVars(v.col) }, v.text, meta.childNodes.length ? meta : null);
   }
 
   function removeCardButton(cid) {
@@ -387,10 +456,10 @@ function Room(id) {
     const list = ranked();
     const focus = S.state.focus || null;
     if (!list.length) { dom.ranked.replaceChildren(el('div', { class: 'empty', text: 'No cards to discuss.' })); return; }
-    dom.ranked.replaceChildren(...list.map((c) => el('div', { class: `card${focus === c.cid ? ' focus' : ''}`, 'data-id': c.cid },
-      el('div', { class: 'tally', title: 'Votes', text: String(c.votes) }),
+    dom.ranked.replaceChildren(...list.map((c) => el('div', { class: `card${focus === c.cid ? ' focus' : ''}`, 'data-id': c.cid, style: colVars(c.col) },
+      el('div', { class: `tally${c.votes ? '' : ' zero'}`, title: 'Votes', text: String(c.votes) }),
       el('div', {},
-        el('span', { class: 'tag', style: `background: var(--col-${c.col % 6})`, text: S.meta.columns[c.col] || '' }),
+        el('span', { class: 'tag', text: S.meta.columns[c.col] || '' }),
         el('div', { text: c.text }),
         isF() ? el('div', { class: 'meta' }, el('span', { text: focus === c.cid ? 'Discussing now' : '' }), el('span', { class: 'row' },
           el('button', { class: 'btn small', text: focus === c.cid ? 'Stop discussing' : 'Discuss this', onclick: () => setState({ focus: focus === c.cid ? null : c.cid }) }),
@@ -467,12 +536,13 @@ function Room(id) {
   function tick() {
     if (!S.state || !dom.timer) return;
     const end = S.state.timerEnd;
-    if (!end) { dom.timer.textContent = ''; dom.timer.classList.remove('up'); return; }
+    if (!end) { dom.timer.textContent = ''; dom.timer.classList.remove('up', 'low'); return; }
     const ms = end - now();
-    if (ms <= 0) { dom.timer.textContent = "Time's up"; dom.timer.classList.add('up'); return; }
+    if (ms <= 0) { dom.timer.textContent = "Time's up"; dom.timer.classList.remove('low'); dom.timer.classList.add('up'); return; }
     const s = Math.ceil(ms / 1000);
     dom.timer.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
     dom.timer.classList.remove('up');
+    dom.timer.classList.toggle('low', s <= 30);
   }
 
   // --------------------------------------------------------- actions
@@ -545,20 +615,30 @@ function Room(id) {
   function votesLeft() { return Math.max(0, S.meta.votesPerPerson - Object.keys(S.myVotes || {}).length); }
 
   async function vote(cid) {
-    for (let i = 0; i < S.meta.votesPerPerson; i++) {
-      const k = `v${i}`;
-      if (!S.myVotes[k]) {
-        try { await set(ref(db, `${base}/votes/${uid}/${k}`), cid); } catch (e) { toast(`Vote not saved: ${e.message}`); }
+    try {
+      if (!S.vid) {
+        const vid = push(ref(db, `${base}/votes`)).key;
+        await update(ref(db, base), { [`ballots/${uid}`]: vid, [`votes/${vid}/v0`]: cid });
+        S.vid = vid;
+        S.myVotes = { v0: cid };
+        watchMyVotes();
+        render();
         return;
       }
+      for (let i = 0; i < S.meta.votesPerPerson; i++) {
+        const k = `v${i}`;
+        if (!S.myVotes[k]) { await set(ref(db, `${base}/votes/${S.vid}/${k}`), cid); return; }
+      }
+      toast('No votes left');
+    } catch (e) {
+      toast(`Vote not saved: ${e.message}`);
     }
-    toast('No votes left');
   }
 
   async function unvote(cid) {
     const k = Object.keys(S.myVotes || {}).find((key) => S.myVotes[key] === cid);
-    if (!k) return;
-    try { await remove(ref(db, `${base}/votes/${uid}/${k}`)); } catch (e) { toast(e.message); }
+    if (!k || !S.vid) return;
+    try { await remove(ref(db, `${base}/votes/${S.vid}/${k}`)); } catch (e) { toast(e.message); }
   }
 
   async function addAction() {
