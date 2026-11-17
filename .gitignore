@@ -1,0 +1,11 @@
+# Firebase web config for your own deployment. Never commit it.
+public/config.js
+
+# Firebase CLI state that would name your project
+.firebaserc
+.firebase/
+firebase-debug.log
+database-debug.log
+
+node_modules/
+.DS_Store
